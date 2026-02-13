@@ -6,9 +6,9 @@
  *   - Go → Browser:  client.register("Service/Method", handler)
  *
  * Wire protocol (symmetric — either direction):
- *   Request:  { "id": "1", "method": "Service/Method", "payload": {...} }
- *   Response: { "id": "1", "result": {...} }
- *   Error:    { "id": "1", "error": { "code": 5, "message": "..." } }
+ *   Request:  { "jsonrpc":"2.0", "id":"1", "method":"Service/Method", "params": {...} }
+ *   Response: { "jsonrpc":"2.0", "id":"1", "result": {...} }
+ *   Error:    { "jsonrpc":"2.0", "id":"1", "error": { "code": 5, "message": "..." } }
  *
  * A message is a request if it has "method".
  * A message is a response if it has "result" or "error".
@@ -32,12 +32,12 @@ const DEFAULTS = Object.freeze({
         enabled: true,
         intervalMs: 15000,
         timeoutMs: 5000,
-        method: "holon-web/Heartbeat",
-        payload: {},
+        method: "rpc.heartbeat",
+        params: {},
     },
 });
 
-const ALLOWED_ENVELOPE_KEYS = new Set(["id", "method", "payload", "result", "error"]);
+const ALLOWED_ENVELOPE_KEYS = new Set(["jsonrpc", "id", "method", "params", "result", "error"]);
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
 /**
@@ -71,7 +71,7 @@ export class HolonClient {
     #pending = new Map();  // id → { kind, resolve, reject, timer }
     #pendingInvokeCount = 0;
     #pendingInvokeReservations = 0;
-    #handlers = new Map(); // method → async handler(payload) → result
+    #handlers = new Map(); // method → async handler(params) → result
     #connected = null;
     #closed = false;
     #config;
@@ -204,7 +204,12 @@ export class HolonClient {
             releaseReservation();
 
             try {
-                ws.send(JSON.stringify({ id, method, payload }));
+                ws.send(JSON.stringify({
+                    jsonrpc: "2.0",
+                    id,
+                    method,
+                    params: payload,
+                }));
             } catch {
                 const pending = this.#deletePending(id, "send_error");
                 if (!pending) return;
@@ -240,7 +245,7 @@ export class HolonClient {
      */
     #openSocket() {
         return new Promise((resolve, reject) => {
-            const ws = new this.#WS(this.#url, "holon-web");
+            const ws = new this.#WS(this.#url, "holon-rpc");
             let opened = false;
             let settled = false;
 
@@ -361,6 +366,7 @@ export class HolonClient {
 
         if (!handler) {
             ws.send(JSON.stringify({
+                jsonrpc: "2.0",
                 id: msg.id,
                 error: { code: 12, message: `method "${msg.method}" not registered` },
             }));
@@ -368,12 +374,13 @@ export class HolonClient {
         }
 
         try {
-            const result = await handler(msg.payload ?? {});
-            ws.send(JSON.stringify({ id: msg.id, result }));
+            const result = await handler(msg.params ?? {});
+            ws.send(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
         } catch (err) {
             const code = err instanceof HolonError ? err.code : 13;
             const message = typeof err?.message === "string" ? err.message : "internal error";
             ws.send(JSON.stringify({
+                jsonrpc: "2.0",
                 id: msg.id,
                 error: { code, message },
             }));
@@ -566,9 +573,10 @@ export class HolonClient {
 
         try {
             ws.send(JSON.stringify({
+                jsonrpc: "2.0",
                 id,
                 method: this.#config.heartbeat.method,
-                payload: this.#config.heartbeat.payload,
+                params: this.#config.heartbeat.params,
             }));
         } catch {
             const pending = this.#deletePending(id, "send_error");
@@ -673,7 +681,7 @@ function normalizeOptions(options) {
                     heartbeatObj.method ?? DEFAULTS.heartbeat.method,
                     "heartbeat.method",
                 ),
-                payload: heartbeatObj.payload ?? DEFAULTS.heartbeat.payload,
+                params: heartbeatObj.params ?? DEFAULTS.heartbeat.params,
             },
         },
         onProtocolWarning: typeof options.onProtocolWarning === "function"
@@ -691,6 +699,10 @@ function validateEnvelope(msg) {
         if (!ALLOWED_ENVELOPE_KEYS.has(key)) {
             return { ok: false, reason: `unknown field: ${key}` };
         }
+    }
+
+    if (msg.jsonrpc !== "2.0") {
+        return { ok: false, reason: "jsonrpc must be \"2.0\"" };
     }
 
     if (!hasOwn(msg, "id") || typeof msg.id !== "string" || msg.id.trim() === "") {
@@ -715,13 +727,13 @@ function validateEnvelope(msg) {
             msg: {
                 id: msg.id,
                 method: msg.method,
-                payload: hasOwn(msg, "payload") ? msg.payload : {},
+                params: hasOwn(msg, "params") ? msg.params : {},
             },
         };
     }
 
-    if (hasOwn(msg, "payload")) {
-        return { ok: false, reason: "response cannot include payload" };
+    if (hasOwn(msg, "params")) {
+        return { ok: false, reason: "response cannot include params" };
     }
 
     if (hasResult === hasError) {

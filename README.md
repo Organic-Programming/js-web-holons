@@ -26,7 +26,7 @@ a simple JSON-over-WebSocket protocol — no gRPC-Web, no Envoy, no proxy.
 ┌──────────────┐   WebSocket       ┌──────────────────────────────────┐
 │  Browser     │  ws://:8080/ws    │  Go Holon                        │
 │  js-web-     │ ◄──────────────►  │  ┌──────────┐   ┌─────────────┐ │
-│  holons      │  holon-web proto  │  │ WebBridge │──►│ gRPC server │ │
+│  holons      │  holon-rpc proto  │  │ WebBridge │──►│ gRPC server │ │
 │  (client)    │                   │  │ (JSON/WS) │   │ (standard)  │ │
 └──────────────┘                   │  └──────────┘   └─────────────┘ │
                                    └──────────────────────────────────┘
@@ -34,22 +34,21 @@ a simple JSON-over-WebSocket protocol — no gRPC-Web, no Envoy, no proxy.
 
 ## Wire Protocol
 
-The protocol is a simple JSON-RPC-style envelope over WebSocket
-with subprotocol `holon-web`:
+The protocol is JSON-RPC 2.0 over WebSocket with subprotocol `holon-rpc`:
 
 **Request** (browser → server):
 ```json
-{ "id": "1", "method": "hello.v1.HelloService/Greet", "payload": {"name":"Alice"} }
+{ "jsonrpc": "2.0", "id": "1", "method": "hello.v1.HelloService/Greet", "params": {"name":"Alice"} }
 ```
 
 **Response** (server → browser):
 ```json
-{ "id": "1", "result": {"message":"Hello, Alice!"} }
+{ "jsonrpc": "2.0", "id": "1", "result": {"message":"Hello, Alice!"} }
 ```
 
 **Error** (server → browser):
 ```json
-{ "id": "1", "error": {"code": 12, "message": "method not registered"} }
+{ "jsonrpc": "2.0", "id": "1", "error": {"code": 12, "message": "method not registered"} }
 ```
 
 For strict envelope rules and ID semantics, see [`PROTOCOL.md`](./PROTOCOL.md).

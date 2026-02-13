@@ -1,18 +1,18 @@
 ---
 # Cartouche v1
-title: "holon-web Protocol Specification"
+title: "Holon-RPC Protocol Specification"
 author:
   name: "B. ALTER"
   copyright: "© 2026 Benoit Pereira da Silva"
 created: 2026-02-12
-revised: 2026-02-12
+revised: 2026-02-13
 lang: en-US
 access:
   humans: true
   agents: true
 status: draft
 ---
-# holon-web Protocol (js-web-holons)
+# Holon-RPC Protocol (js-web-holons)
 
 This document specifies the JSON envelope protocol used between:
 
@@ -23,7 +23,7 @@ The protocol is symmetric: both sides may send requests and responses.
 
 ## Transport
 
-- WebSocket subprotocol: `holon-web`
+- WebSocket subprotocol: `holon-rpc`
 - Frame type: UTF-8 text frames containing a single JSON object
 - Binary frames are invalid for this protocol
 
@@ -31,9 +31,10 @@ The protocol is symmetric: both sides may send requests and responses.
 
 Allowed top-level fields:
 
+- `jsonrpc`
 - `id`
 - `method`
-- `payload`
+- `params`
 - `result`
 - `error`
 
@@ -42,41 +43,44 @@ Unknown fields are invalid.
 ### Request
 
 ```json
-{ "id": "1", "method": "pkg.Service/Method", "payload": {"x": 1} }
+{ "jsonrpc": "2.0", "id": "1", "method": "pkg.Service/Method", "params": {"x": 1} }
 ```
 
 Rules:
 
+- `jsonrpc`: required, must be `"2.0"`
 - `id`: required, non-empty string
 - `method`: required, non-empty string
-- `payload`: optional, any JSON value (`{}` if omitted)
+- `params`: optional object (`{}` if omitted)
 - `result`/`error`: must be absent
 
 ### Success response
 
 ```json
-{ "id": "1", "result": {"ok": true} }
+{ "jsonrpc": "2.0", "id": "1", "result": {"ok": true} }
 ```
 
 Rules:
 
+- `jsonrpc`: required, must be `"2.0"`
 - `id`: required, non-empty string
 - `result`: required
-- `error`/`method`/`payload`: must be absent
+- `error`/`method`/`params`: must be absent
 
 ### Error response
 
 ```json
-{ "id": "1", "error": { "code": 12, "message": "method not registered" } }
+{ "jsonrpc": "2.0", "id": "1", "error": { "code": 12, "message": "method not registered" } }
 ```
 
 Rules:
 
+- `jsonrpc`: required, must be `"2.0"`
 - `id`: required, non-empty string
 - `error`: required object
 - `error.code`: required integer
 - `error.message`: required string
-- `result`/`method`/`payload`: must be absent
+- `result`/`method`/`params`: must be absent
 
 ## ID semantics
 
@@ -102,10 +106,13 @@ These responses are ignored and reported as protocol warnings.
 
 ## Error model
 
-The protocol uses numeric status codes compatible with gRPC-style semantics.
+The protocol uses JSON-RPC + gRPC-style numeric semantics.
 Common codes in this SDK:
 
-- `3`: invalid argument / malformed envelope
+- `-32700`: parse error
+- `-32600`: invalid request / invalid response envelope
+- `-32601`: method not found
+- `-32602`: invalid params
 - `4`: timeout / deadline exceeded
 - `8`: resource exhausted (e.g. max pending reached)
 - `12`: unimplemented (method not registered)

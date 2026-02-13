@@ -84,8 +84,9 @@ function startMockServer(options = {}) {
                 }
 
                 if (msg.method === "hello.v1.HelloService/Greet") {
-                    const name = msg.payload?.name || "World";
+                    const name = msg.params?.name || "World";
                     sendJSON(ws, {
+                        jsonrpc: "2.0",
                         id: msg.id,
                         result: { message: `Hello, ${name}!` },
                     });
@@ -93,16 +94,16 @@ function startMockServer(options = {}) {
                 }
 
                 if (msg.method === "test.v1.Service/Dupe") {
-                    sendJSON(ws, { id: msg.id, result: { ok: true } });
+                    sendJSON(ws, { jsonrpc: "2.0", id: msg.id, result: { ok: true } });
                     setTimeout(() => {
-                        sendJSON(ws, { id: msg.id, result: { ok: true, duplicate: true } });
+                        sendJSON(ws, { jsonrpc: "2.0", id: msg.id, result: { ok: true, duplicate: true } });
                     }, 10);
                     return;
                 }
 
                 if (msg.method === "test.v1.Service/Slow") {
                     setTimeout(() => {
-                        sendJSON(ws, { id: msg.id, result: { ok: true } });
+                        sendJSON(ws, { jsonrpc: "2.0", id: msg.id, result: { ok: true } });
                     }, slowDelayMs);
                     return;
                 }
@@ -112,6 +113,7 @@ function startMockServer(options = {}) {
                 }
 
                 sendJSON(ws, {
+                    jsonrpc: "2.0",
                     id: msg.id,
                     error: { code: 12, message: `method "${msg.method}" not registered` },
                 });
@@ -184,7 +186,7 @@ function serverInvoke(ws, method, payload, timeout = 5000) {
         };
 
         ws.on("message", handler);
-        ws.send(JSON.stringify({ id, method, payload }));
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params: payload }));
     });
 }
 
@@ -326,7 +328,7 @@ describe("HolonClient", () => {
             await client.connect();
             const ws = await waitForConnectionCount(1);
 
-            ws.send(JSON.stringify({ method: "x.Y/Z", payload: {} })); // missing id
+            ws.send(JSON.stringify({ jsonrpc: "2.0", method: "x.Y/Z", params: {} })); // missing id
             await waitForWarning(warnings, "invalid_envelope");
         });
     });
@@ -336,7 +338,7 @@ describe("HolonClient", () => {
             await client.connect();
             const ws = await waitForConnectionCount(1);
 
-            ws.send(JSON.stringify({ id: 1, result: {} }));
+            ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
             await waitForWarning(warnings, "invalid_envelope");
         });
     });
@@ -346,7 +348,7 @@ describe("HolonClient", () => {
             await client.connect();
             const ws = await waitForConnectionCount(1);
 
-            ws.send(JSON.stringify({ id: "unknown-1", result: { ok: true } }));
+            ws.send(JSON.stringify({ jsonrpc: "2.0", id: "unknown-1", result: { ok: true } }));
             await waitForWarning(warnings, "unknown_response_id");
         });
     });
@@ -449,7 +451,7 @@ describe("HolonClient", () => {
                         interval: 20,
                         timeout: 20,
                         method: "test.v1.Service/Heartbeat",
-                        payload: {},
+                        params: {},
                     },
                 },
             },
