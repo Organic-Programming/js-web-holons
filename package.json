@@ -1,0 +1,26 @@
+{
+  "name": "js-web-holons",
+  "version": "0.1.0",
+  "description": "Browser SDK for Organic Programming — WebSocket client for holons",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/client_test.mjs",
+    "sync:example-sdk": "bash ../../scripts/sync-web-sdk.sh sync",
+    "check:example-sdk-sync": "bash ../../scripts/sync-web-sdk.sh check"
+  },
+  "keywords": [
+    "organic-programming",
+    "holon",
+    "websocket",
+    "grpc",
+    "browser"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}
