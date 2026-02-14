@@ -171,4 +171,87 @@ describe("HolonServer", () => {
             await server.close();
         }
     });
+
+    itRequiresLoopback("rejects oversized messages with close code 1009 and remains healthy", async () => {
+        const server = new HolonServer("ws://127.0.0.1:0/rpc", {
+            maxConnections: 2,
+            maxPayloadBytes: 1024 * 1024,
+        });
+        server.register("echo.v1.Echo/Ping", (params = {}) => params);
+
+        const uri = await server.start();
+        const ws = new WebSocket(uri, "holon-rpc");
+
+        try {
+            await waitForOpen(ws);
+
+            ws.send(JSON.stringify({
+                jsonrpc: "2.0",
+                id: "big-1",
+                method: "echo.v1.Echo/Ping",
+                params: { message: "x".repeat(2 * 1024 * 1024) },
+            }));
+
+            const closed = await waitForClose(ws, 3000);
+            assert.equal(closed.code, 1009);
+
+            const probe = new HolonClient(uri, {
+                WebSocket,
+                reconnect: false,
+                heartbeat: false,
+            });
+
+            try {
+                const heartbeat = await probe.invoke("rpc.heartbeat", {});
+                assert.deepEqual(heartbeat, {});
+            } finally {
+                probe.close();
+            }
+        } finally {
+            ws.close();
+            await server.close();
+        }
+    });
+
+    itRequiresLoopback("survives client disconnect while handler is still running", async () => {
+        const server = new HolonServer("ws://127.0.0.1:0/rpc", {
+            maxConnections: 2,
+        });
+        server.register("echo.v1.Echo/Ping", async (params = {}) => {
+            await wait(80);
+            return { message: String(params.message || "") };
+        });
+
+        const uri = await server.start();
+        const ws = new WebSocket(uri, "holon-rpc");
+
+        try {
+            await waitForOpen(ws);
+            ws.send(JSON.stringify({
+                jsonrpc: "2.0",
+                id: "race-1",
+                method: "echo.v1.Echo/Ping",
+                params: { message: "race" },
+            }));
+            ws.close(1000, "disconnect");
+
+            await wait(120);
+
+            const probe = new HolonClient(uri, {
+                WebSocket,
+                reconnect: false,
+                heartbeat: false,
+            });
+
+            try {
+                const heartbeat = await probe.invoke("rpc.heartbeat", {});
+                assert.deepEqual(heartbeat, {});
+            } finally {
+                probe.close();
+            }
+        } finally {
+            ws.close();
+            await server.close();
+        }
+    });
 });

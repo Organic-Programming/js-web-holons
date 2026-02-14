@@ -8,6 +8,9 @@ const DEFAULT_LISTEN = "ws://127.0.0.1:0/rpc";
 const DEFAULT_SDK = "js-web-holons";
 const DEFAULT_VERSION = "0.1.0";
 const DEFAULT_MAX_CONNECTIONS = 1;
+const DEFAULT_HANDLER_DELAY_MS = 0;
+const DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024;
+const DEFAULT_SHUTDOWN_GRACE_MS = 10_000;
 
 export function parseArgs(argv = process.argv) {
     const out = {
@@ -15,6 +18,9 @@ export function parseArgs(argv = process.argv) {
         sdk: DEFAULT_SDK,
         version: DEFAULT_VERSION,
         maxConnections: DEFAULT_MAX_CONNECTIONS,
+        handlerDelayMs: DEFAULT_HANDLER_DELAY_MS,
+        maxPayloadBytes: DEFAULT_MAX_PAYLOAD_BYTES,
+        shutdownGraceMs: DEFAULT_SHUTDOWN_GRACE_MS,
     };
 
     for (let i = 2; i < argv.length; i += 1) {
@@ -45,6 +51,24 @@ export function parseArgs(argv = process.argv) {
             i += 1;
             continue;
         }
+        if (token === "--handler-delay-ms") {
+            const raw = requireValue(argv, i, "--handler-delay-ms");
+            out.handlerDelayMs = parseNonNegativeInteger(raw, "--handler-delay-ms");
+            i += 1;
+            continue;
+        }
+        if (token === "--max-payload-bytes") {
+            const raw = requireValue(argv, i, "--max-payload-bytes");
+            out.maxPayloadBytes = parsePositiveInteger(raw, "--max-payload-bytes");
+            i += 1;
+            continue;
+        }
+        if (token === "--shutdown-grace-ms") {
+            const raw = requireValue(argv, i, "--shutdown-grace-ms");
+            out.shutdownGraceMs = parsePositiveInteger(raw, "--shutdown-grace-ms");
+            i += 1;
+            continue;
+        }
 
         throw new Error(`unknown flag: ${token}`);
     }
@@ -59,9 +83,14 @@ export async function run(argv = process.argv, options = {}) {
         || ((uri, serverOptions) => new HolonServer(uri, serverOptions));
     const server = createServer(args.listen, {
         maxConnections: args.maxConnections,
+        maxPayloadBytes: args.maxPayloadBytes,
+        shutdownGraceMs: args.shutdownGraceMs,
     });
 
-    server.register("echo.v1.Echo/Ping", (params = {}) => {
+    server.register("echo.v1.Echo/Ping", async (params = {}) => {
+        if (args.handlerDelayMs > 0) {
+            await sleep(args.handlerDelayMs);
+        }
         const message = typeof params?.message === "string" ? params.message : "";
         return {
             message,
@@ -139,6 +168,26 @@ function requireValue(argv, index, flag) {
         throw new Error(`missing value for ${flag}`);
     }
     return value;
+}
+
+function parsePositiveInteger(raw, flag) {
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`${flag} must be a positive integer`);
+    }
+    return parsed;
+}
+
+function parseNonNegativeInteger(raw, flag) {
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new Error(`${flag} must be a non-negative integer`);
+    }
+    return parsed;
+}
+
+function sleep(delayMs) {
+    return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 async function main() {

@@ -46,6 +46,7 @@ describe("certification", () => {
         assert.equal(cert.capabilities.grpc_dial_stdio, true);
         assert.equal(cert.capabilities.holon_rpc_server, true);
         assert.equal(cert.capabilities.valence, "mono");
+        assert.equal(cert.profile, "browser");
     });
 
     it("parseArgs uses expected defaults", () => {

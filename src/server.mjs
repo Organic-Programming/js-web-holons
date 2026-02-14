@@ -4,6 +4,8 @@ import { WebSocketServer } from "ws";
 
 const DEFAULT_URI = "ws://127.0.0.1:0/rpc";
 const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024;
+const DEFAULT_SHUTDOWN_GRACE_MS = 10_000;
 const WS_OPEN = 1;
 
 const ALLOWED_ENVELOPE_KEYS = new Set(["jsonrpc", "id", "method", "params", "result", "error"]);
@@ -17,11 +19,16 @@ export class HolonServer {
     #nextServerID = 1;
     #handlers = new Map();
     #clients = new Map();
+    #activeRequests = 0;
+    #drainWaiters = [];
     #waiters = [];
     #starting = null;
+    #closing = null;
     #closed = false;
     #httpServer = null;
     #wss = null;
+    #maxPayloadBytes;
+    #shutdownGraceMs;
 
     constructor(uri = DEFAULT_URI, options = {}) {
         this.#uri = nonEmptyString(uri, "uri");
@@ -32,6 +39,15 @@ export class HolonServer {
             positiveInt(maxConnections, "maxConnections");
         }
         this.#maxConnections = maxConnections;
+
+        this.#maxPayloadBytes = positiveInt(
+            options.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
+            "maxPayloadBytes",
+        );
+        this.#shutdownGraceMs = positiveInt(
+            options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS,
+            "shutdownGraceMs",
+        );
     }
 
     get address() {
@@ -100,6 +116,7 @@ export class HolonServer {
         this.#wss = new WebSocketServer({
             server: this.#httpServer,
             path: listen.path,
+            maxPayload: this.#maxPayloadBytes,
             handleProtocols: (protocols) => {
                 if (protocols.has("holon-rpc")) {
                     return "holon-rpc";
@@ -132,10 +149,20 @@ export class HolonServer {
     }
 
     async close() {
+        if (this.#closing) {
+            return this.#closing;
+        }
         if (this.#closed) {
             return;
         }
         this.#closed = true;
+        this.#closing = this.#closeInternal();
+        await this.#closing;
+        this.#closing = null;
+    }
+
+    async #closeInternal() {
+        const connectionClosedError = new HolonError(14, "connection closed");
 
         for (const waiter of this.#waiters) {
             clearTimeout(waiter.timer);
@@ -143,8 +170,17 @@ export class HolonServer {
         }
         this.#waiters.length = 0;
 
+        let wssClosed = null;
+        if (this.#wss) {
+            const wss = this.#wss;
+            this.#wss = null;
+            wssClosed = new Promise((resolve) => wss.close(() => resolve()));
+        }
+
+        await this.#waitForActiveRequests();
+
         for (const peer of this.#clients.values()) {
-            this.#dropPeer(peer, new HolonError(14, "connection closed"));
+            this.#dropPeer(peer, connectionClosedError);
             try {
                 peer.ws.close(1001, "server closed");
             } catch {
@@ -153,15 +189,29 @@ export class HolonServer {
         }
         this.#clients.clear();
 
-        if (this.#wss) {
-            await new Promise((resolve) => this.#wss.close(() => resolve()));
-            this.#wss = null;
+        if (wssClosed) {
+            await wssClosed;
         }
 
         if (this.#httpServer) {
             await new Promise((resolve) => this.#httpServer.close(() => resolve()));
             this.#httpServer = null;
         }
+    }
+
+    async #waitForActiveRequests() {
+        if (this.#activeRequests === 0) {
+            return;
+        }
+
+        await Promise.race([
+            new Promise((resolve) => {
+                this.#drainWaiters.push(resolve);
+            }),
+            new Promise((resolve) => {
+                setTimeout(resolve, this.#shutdownGraceMs);
+            }),
+        ]);
     }
 
     invoke(clientOrID, method, params = {}, options = {}) {
@@ -214,6 +264,15 @@ export class HolonServer {
     }
 
     #handleConnection(ws) {
+        if (this.#closed) {
+            try {
+                ws.close(1001, "server is closing");
+            } catch {
+                // no-op
+            }
+            return;
+        }
+
         if (this.#clients.size >= this.#maxConnections) {
             try {
                 ws.close(1008, "max connections exceeded");
@@ -286,50 +345,61 @@ export class HolonServer {
     }
 
     async #handleRequest(peer, msg) {
-        if (msg.method === "rpc.heartbeat") {
-            await this.#sendJSON(peer.ws, {
-                jsonrpc: "2.0",
-                id: msg.id,
-                result: {},
-            });
-            return;
-        }
-
-        const handler = this.#handlers.get(msg.method);
-        if (!handler) {
-            await this.#sendJSON(peer.ws, {
-                jsonrpc: "2.0",
-                id: msg.id,
-                error: {
-                    code: -32601,
-                    message: `method \"${msg.method}\" not found`,
-                },
-            });
-            return;
-        }
-
+        this.#activeRequests += 1;
         try {
-            const result = await handler(msg.params ?? {}, { id: peer.id });
-            await this.#sendJSON(peer.ws, {
-                jsonrpc: "2.0",
-                id: msg.id,
-                result: normalizeResult(result),
-            });
-        } catch (err) {
-            const code = Number.isInteger(err?.code)
-                ? Number(err.code)
-                : err instanceof HolonError
-                    ? err.code
-                    : 13;
-            const message = typeof err?.message === "string" && err.message.trim() !== ""
-                ? err.message
-                : "internal error";
+            if (msg.method === "rpc.heartbeat") {
+                await this.#safeSendJSON(peer.ws, {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    result: {},
+                });
+                return;
+            }
 
-            await this.#sendJSON(peer.ws, {
-                jsonrpc: "2.0",
-                id: msg.id,
-                error: { code, message },
-            });
+            const handler = this.#handlers.get(msg.method);
+            if (!handler) {
+                await this.#safeSendJSON(peer.ws, {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    error: {
+                        code: -32601,
+                        message: `method \"${msg.method}\" not found`,
+                    },
+                });
+                return;
+            }
+
+            try {
+                const result = await handler(msg.params ?? {}, { id: peer.id });
+                await this.#safeSendJSON(peer.ws, {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    result: normalizeResult(result),
+                });
+            } catch (err) {
+                const code = Number.isInteger(err?.code)
+                    ? Number(err.code)
+                    : err instanceof HolonError
+                        ? err.code
+                        : 13;
+                const message = typeof err?.message === "string" && err.message.trim() !== ""
+                    ? err.message
+                    : "internal error";
+
+                await this.#safeSendJSON(peer.ws, {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    error: { code, message },
+                });
+            }
+        } finally {
+            this.#activeRequests = Math.max(0, this.#activeRequests - 1);
+            if (this.#activeRequests === 0 && this.#drainWaiters.length > 0) {
+                const waiters = this.#drainWaiters.splice(0, this.#drainWaiters.length);
+                for (const waiter of waiters) {
+                    waiter();
+                }
+            }
         }
     }
 
@@ -377,6 +447,15 @@ export class HolonServer {
                 resolve();
             });
         });
+    }
+
+    async #safeSendJSON(ws, payload) {
+        try {
+            await this.#sendJSON(ws, payload);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     #closeForProtocolViolation(ws, reason) {

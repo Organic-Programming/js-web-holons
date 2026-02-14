@@ -14,7 +14,7 @@ status: draft
 ---
 # js-web-holons
 
-**Browser-side WebSocket client for invoking holon RPC methods.**
+**Browser-side Holon-RPC client plus a Node test/server harness.**
 
 This SDK is the browser counterpart to `go-holons/pkg/transport.WebBridge`.
 Together they allow any browser application to call holon methods via
@@ -101,6 +101,20 @@ Close the WebSocket connection gracefully.
 ### `HolonError`
 
 Error class with `code` (integer) and `message` (string) properties.
+
+### `new HolonServer(uri, options?)` (Node test/runtime harness)
+
+- `uri` — WebSocket bind URL, e.g. `"ws://127.0.0.1:0/rpc"`
+- `options.maxConnections` — maximum concurrent WebSocket peers (`1` by default for monovalent behavior)
+- `options.maxPayloadBytes` — max inbound message size (`1 MiB` default; oversize closes with WS 1009)
+- `options.shutdownGraceMs` — graceful shutdown drain window (`10000` ms default)
+
+Methods:
+
+- `server.register(method, handler)` — register a server-side handler
+- `server.invoke(clientID, method, params)` — server-initiated call to a connected client
+- `server.waitForClient({ timeout })` — wait for first connected client
+- `server.start()` / `server.close()` — lifecycle management
 
 ## Test and Sanity Check
 

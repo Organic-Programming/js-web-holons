@@ -10,6 +10,9 @@ describe("echo-server command", () => {
         assert.equal(parsed.sdk, "js-web-holons");
         assert.equal(parsed.version, "0.1.0");
         assert.equal(parsed.maxConnections, 1);
+        assert.equal(parsed.handlerDelayMs, 0);
+        assert.equal(parsed.maxPayloadBytes, 1024 * 1024);
+        assert.equal(parsed.shutdownGraceMs, 10_000);
     });
 
     it("parseArgs supports explicit flags", () => {
@@ -24,12 +27,21 @@ describe("echo-server command", () => {
             "9.9.9",
             "--max-connections",
             "3",
+            "--handler-delay-ms",
+            "250",
+            "--max-payload-bytes",
+            "131072",
+            "--shutdown-grace-ms",
+            "7500",
         ]);
 
         assert.equal(parsed.listen, "ws://127.0.0.1:9999/custom");
         assert.equal(parsed.sdk, "custom-sdk");
         assert.equal(parsed.version, "9.9.9");
         assert.equal(parsed.maxConnections, 3);
+        assert.equal(parsed.handlerDelayMs, 250);
+        assert.equal(parsed.maxPayloadBytes, 131072);
+        assert.equal(parsed.shutdownGraceMs, 7500);
     });
 
     it("run registers echo handler and starts the server", async () => {
@@ -60,6 +72,12 @@ describe("echo-server command", () => {
                 "1.2.3",
                 "--max-connections",
                 "2",
+                "--handler-delay-ms",
+                "30",
+                "--max-payload-bytes",
+                "2048",
+                "--shutdown-grace-ms",
+                "3000",
             ],
             {
                 createServer: (uri, options) => {
@@ -77,11 +95,13 @@ describe("echo-server command", () => {
         assert.equal(capture.started, true);
         assert.equal(capture.uri, "ws://127.0.0.1:4567/rpc");
         assert.equal(capture.options.maxConnections, 2);
+        assert.equal(capture.options.maxPayloadBytes, 2048);
+        assert.equal(capture.options.shutdownGraceMs, 3000);
         assert.equal(capture.method, "echo.v1.Echo/Ping");
         assert.equal(capture.startedURI, "ws://127.0.0.1:4567/rpc");
         assert.equal(result.address, "ws://127.0.0.1:4567/rpc");
 
-        const response = capture.handler({ message: "hello" });
+        const response = await capture.handler({ message: "hello" });
         assert.deepEqual(response, {
             message: "hello",
             sdk: "custom-sdk",
