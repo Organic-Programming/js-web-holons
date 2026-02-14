@@ -8,7 +8,7 @@
     ".": "./src/index.mjs"
   },
   "scripts": {
-    "test": "node --test test/client_test.mjs",
+    "test": "node --test test/*.mjs",
     "sync:example-sdk": "bash ../../scripts/sync-web-sdk.sh sync",
     "check:example-sdk-sync": "bash ../../scripts/sync-web-sdk.sh check"
   },

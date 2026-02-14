@@ -1,8 +1,47 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
 import { HolonClient, HolonError } from "../src/index.mjs";
+
+let loopbackProbe = null;
+
+function isSocketPermissionError(err) {
+    if (!err) return false;
+    if (err.code === "EPERM" || err.code === "EACCES") return true;
+    return /listen\s+(eperm|eacces)/i.test(String(err.message || err));
+}
+
+function canListenOnLoopback() {
+    if (loopbackProbe) {
+        return loopbackProbe;
+    }
+
+    loopbackProbe = new Promise((resolve) => {
+        const probe = createNetServer();
+
+        probe.once("error", (err) => {
+            resolve(!isSocketPermissionError(err));
+        });
+
+        probe.listen(0, "127.0.0.1", () => {
+            probe.close(() => resolve(true));
+        });
+    });
+
+    return loopbackProbe;
+}
+
+function itRequiresLoopback(name, fn) {
+    it(name, async (t) => {
+        if (!await canListenOnLoopback()) {
+            t.skip("socket bind not permitted in this environment");
+            return;
+        }
+        await fn();
+    });
+}
 
 function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -230,21 +269,21 @@ async function waitForWarning(warnings, type, timeout = 1000) {
 describe("HolonClient", () => {
     // --- Browser → Go ---
 
-    it("browser→go: invokes a method and receives a result", async () => {
+    itRequiresLoopback("browser→go: invokes a method and receives a result", async () => {
         await withHarness({}, async ({ client }) => {
             const result = await client.invoke("hello.v1.HelloService/Greet", { name: "Alice" });
             assert.equal(result.message, "Hello, Alice!");
         });
     });
 
-    it("browser→go: uses default name when payload is empty", async () => {
+    itRequiresLoopback("browser→go: uses default name when payload is empty", async () => {
         await withHarness({}, async ({ client }) => {
             const result = await client.invoke("hello.v1.HelloService/Greet", {});
             assert.equal(result.message, "Hello, World!");
         });
     });
 
-    it("browser→go: returns HolonError for unknown methods", async () => {
+    itRequiresLoopback("browser→go: returns HolonError for unknown methods", async () => {
         await withHarness({}, async ({ client }) => {
             await assert.rejects(
                 () => client.invoke("no.Such/Method"),
@@ -259,7 +298,7 @@ describe("HolonClient", () => {
 
     // --- Go → Browser ---
 
-    it("go→browser: server calls registered browser handler", async () => {
+    itRequiresLoopback("go→browser: server calls registered browser handler", async () => {
         await withHarness({}, async ({ client, waitForConnectionCount }) => {
             client.register("ui.v1.UIService/GetViewport", (payload) => ({
                 width: 1920,
@@ -277,7 +316,7 @@ describe("HolonClient", () => {
         });
     });
 
-    it("go→browser: server gets error for unregistered method", async () => {
+    itRequiresLoopback("go→browser: server gets error for unregistered method", async () => {
         await withHarness({}, async ({ client, waitForConnectionCount }) => {
             await client.connect();
             const ws = await waitForConnectionCount(1);
@@ -292,7 +331,7 @@ describe("HolonClient", () => {
         });
     });
 
-    it("go→browser: handler errors propagate to server", async () => {
+    itRequiresLoopback("go→browser: handler errors propagate to server", async () => {
         await withHarness({}, async ({ client, waitForConnectionCount }) => {
             client.register("test.v1.Service/Fail", () => {
                 throw new HolonError(3, "bad request from handler");
@@ -313,7 +352,7 @@ describe("HolonClient", () => {
 
     // --- Protocol hardening ---
 
-    it("protocol: malformed JSON is detected", async () => {
+    itRequiresLoopback("protocol: malformed JSON is detected", async () => {
         await withHarness({}, async ({ client, waitForConnectionCount, warnings }) => {
             await client.connect();
             const ws = await waitForConnectionCount(1);
@@ -323,7 +362,7 @@ describe("HolonClient", () => {
         });
     });
 
-    it("protocol: missing required fields are rejected", async () => {
+    itRequiresLoopback("protocol: missing required fields are rejected", async () => {
         await withHarness({}, async ({ client, waitForConnectionCount, warnings }) => {
             await client.connect();
             const ws = await waitForConnectionCount(1);
@@ -333,7 +372,7 @@ describe("HolonClient", () => {
         });
     });
 
-    it("protocol: wrong field types are rejected", async () => {
+    itRequiresLoopback("protocol: wrong field types are rejected", async () => {
         await withHarness({}, async ({ client, waitForConnectionCount, warnings }) => {
             await client.connect();
             const ws = await waitForConnectionCount(1);
@@ -343,7 +382,7 @@ describe("HolonClient", () => {
         });
     });
 
-    it("protocol: unknown response IDs are classified", async () => {
+    itRequiresLoopback("protocol: unknown response IDs are classified", async () => {
         await withHarness({}, async ({ client, waitForConnectionCount, warnings }) => {
             await client.connect();
             const ws = await waitForConnectionCount(1);
@@ -353,7 +392,7 @@ describe("HolonClient", () => {
         });
     });
 
-    it("protocol: duplicate response IDs are classified", async () => {
+    itRequiresLoopback("protocol: duplicate response IDs are classified", async () => {
         await withHarness({}, async ({ client, warnings }) => {
             const result = await client.invoke("test.v1.Service/Dupe", {});
             assert.equal(result.ok, true);
@@ -362,7 +401,7 @@ describe("HolonClient", () => {
         });
     });
 
-    it("protocol: stale response IDs are classified after timeout", async () => {
+    itRequiresLoopback("protocol: stale response IDs are classified after timeout", async () => {
         await withHarness({ server: { slowDelayMs: 120 } }, async ({ client, warnings }) => {
             await assert.rejects(
                 () => client.invoke("test.v1.Service/Slow", {}, { timeout: 20 }),
@@ -379,7 +418,7 @@ describe("HolonClient", () => {
 
     // --- Connection resilience ---
 
-    it("resilience: enforces max pending request limit", async () => {
+    itRequiresLoopback("resilience: enforces max pending request limit", async () => {
         await withHarness(
             { client: { maxPendingRequests: 1 } },
             async ({ client }) => {
@@ -397,7 +436,7 @@ describe("HolonClient", () => {
         );
     });
 
-    it("resilience: uses configurable default timeout", async () => {
+    itRequiresLoopback("resilience: uses configurable default timeout", async () => {
         await withHarness(
             { server: { slowDelayMs: 90 }, client: { defaultTimeout: 25 } },
             async ({ client }) => {
@@ -413,7 +452,7 @@ describe("HolonClient", () => {
         );
     });
 
-    it("resilience: reconnects with backoff after disconnect", async () => {
+    itRequiresLoopback("resilience: reconnects with backoff after disconnect", async () => {
         await withHarness(
             {
                 client: {
@@ -440,7 +479,7 @@ describe("HolonClient", () => {
         );
     });
 
-    it("resilience: heartbeat timeout detects stale connection", async () => {
+    itRequiresLoopback("resilience: heartbeat timeout detects stale connection", async () => {
         await withHarness(
             {
                 server: { dropMethods: ["test.v1.Service/Heartbeat"] },
@@ -462,7 +501,7 @@ describe("HolonClient", () => {
         );
     });
 
-    it("resilience: in-flight invokes reject when disconnected", async () => {
+    itRequiresLoopback("resilience: in-flight invokes reject when disconnected", async () => {
         await withHarness({}, async ({ client, waitForConnectionCount, waitForRequest }) => {
             const pending = client.invoke("test.v1.Service/Hang", {}, { timeout: 2000 });
             await waitForRequest("test.v1.Service/Hang");
